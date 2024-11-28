@@ -121,7 +121,7 @@ import collections
 import idc
 import idautils
 import idaapi
-import ida_struct
+# import ida_struct
 
 from . import ida_utilities as idau
 from . import build_struct
@@ -233,7 +233,7 @@ def _create_class_structs__slices(classinfo, endmarkers=True):
     sid = idau.struct_open(classname)
     if (sid):
         _log(1, f'IDA has already created {classname} struct, renaming it.')
-        if (not ida_struct.set_struc_name(sid, f'ida_{classname}')):
+        if (not idc.set_struc_name(sid, f'ida_{classname}')):
             _log(-1, 'failed to rename IDA struct')
             # XXX: should we return in this case?
 
@@ -284,7 +284,7 @@ def _populate_wrapper_struct__slices(sid, classinfo):
             _log(0, 'Could not find {}::fields', ci.classname)
             return False
         # If this is a 0-length struct (no fields), skip it.
-        size = ida_struct.get_struc_size(fields_sid)
+        size = idc.get_struc_size(fields_sid)
         if size == 0:
             continue
         # If this is already in the wrapper struct, skip it. This avoids weird

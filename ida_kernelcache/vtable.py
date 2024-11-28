@@ -15,6 +15,7 @@ from .symbol import vtable_symbol_for_class, global_name
 from . import ida_utilities as idau
 from . import classes
 from . import stub
+import ida_ida
 
 _log = idau.make_log(0, __name__)
 
@@ -98,8 +99,8 @@ def vtable_length(ea, end=None, scan=False):
     # Now we know that we have at least one nonzero value, our job is easier. Get the full length
     # of the vtable, including the first VTABLE_OFFSET entries and the subsequent nonzero entries,
     # until either we find a zero word (not included), or an address which is not in the range of kernel addresses  or run out of words in the stream.
-    info = idaapi.get_inf_structure()
-    min_addr, max_addr = info.min_ea, info.max_ea
+    # info = idaapi.get_inf_structure()
+    min_addr, max_addr = ida_ida.inf_get_min_ea(), ida_ida.inf_get_max_ea()
     length = VTABLE_OFFSET + 1 + idau.iterlen(takewhile(lambda word: word != 0 and min_addr < word < max_addr, words))
     # Now it's simple: We are valid if the length is long enough, invalid if it's too short.
     return return_value(length >= MIN_VTABLE_LENGTH, length)

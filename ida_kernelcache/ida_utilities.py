@@ -10,13 +10,34 @@ from collections import deque
 import idc
 import idautils
 import idaapi
-import ida_struct
+# import ida_struct
 import ida_bytes
 import ida_funcs
 import ida_name
 import ida_auto
+import ida_typeinf
 
-read_ptr = idaapi.get_qword if idaapi.get_inf_structure().is_64bit() else idaapi.get_dword
+def get_member(tif, offset):
+    if not tif.is_struct():
+        return None
+    
+    udm = ida_typeinf.udm_t()
+    udm.offset = offset * 8
+    idx = tif.find_udm(udm, ida_typeinf.STRMEM_OFFSET)
+    if idx != -1:
+        return udm
+    
+    return None
+
+def get_struc(struct_tid):
+    tif = ida_typeinf.tinfo_t()
+    if tif.get_type_by_tid(struct_tid):
+        if tif.is_struct():
+            return tif
+    return idaapi.BADADDR
+
+
+read_ptr = idaapi.get_qword if idaapi.inf_is_64bit() else idaapi.get_dword
 
 def make_log(log_level, module):
     """Create a logging function."""
@@ -42,17 +63,20 @@ LITTLE_ENDIAN = True
 def _initialize():
     # https://reverseengineering.stackexchange.com/questions/11396/how-to-get-the-cpu-architecture-via-idapython
     global WORD_SIZE, LITTLE_ENDIAN, BIG_ENDIAN
-    info = idaapi.get_inf_structure()
-    if info.is_64bit():
+    # info = idaapi.inf_get_procname()
+    if idaapi.inf_is_64bit():
         WORD_SIZE = 8
-    elif info.is_32bit():
+    elif idaapi.inf_is_32bit_exactly():
         WORD_SIZE = 4
     else:
         WORD_SIZE = 2
-    try:
-        BIG_ENDIAN = info.is_be()
-    except:
-        BIG_ENDIAN = info.mf
+    # try:
+    #     BIG_ENDIAN = idaapi.inf_is_be()
+    # except:
+    #     # BIG_ENDIAN = info.mf
+    #     # BIG_ENDIAN = idaapi.inf_mf
+    BIG_ENDIAN = idaapi.inf_is_be()
+
     LITTLE_ENDIAN = not BIG_ENDIAN
 
 _initialize()
@@ -250,6 +274,8 @@ def Addresses(start, end=None, step=1, length=None, partial=False, aligned=False
 def _instructions_by_range(start, end):
     """A generator to iterate over instructions in a range."""
     pc = start
+    if pc % 2:
+        pc = pc - 1
     while pc < end:
         insn = idautils.DecodeInstruction(pc)
         if insn is None:
@@ -356,38 +382,60 @@ class objectview(object):
     def __len__(self):
         return self.__size
 
-def _read_struct_member_once(ea, flags, size, member_sid, member_size, asobject):
+def _read_struct_member_once(ea, size, member_sid, member_size, asobject):
     """Read part of a struct member for _read_struct_member."""
-    if ida_bytes.is_byte(flags):
-        return read_word(ea, 1), 1
-    elif ida_bytes.is_word(flags):
-        return read_word(ea, 2), 2
-    elif ida_bytes.is_dword(flags):
-        return read_word(ea, 4), 4
-    elif ida_bytes.is_qword(flags):
-        return read_word(ea, 8), 8
-    elif ida_bytes.is_oword(flags):
-        return read_word(ea, 16), 16
-    elif ida_bytes.is_strlit(flags):
-        return idc.get_bytes(ea, size), size
-    elif ida_bytes.is_float(flags):
-        return idc.Float(ea), 4
-    elif ida_bytes.is_double(flags):
-        return idc.Double(ea), 8
-    elif ida_bytes.is_struct(flags):
+    
+    m_t = ida_typeinf.tinfo_t()
+    m_t.get_type_by_tid(member_sid)
+
+    if m_t.is_struct():
         value = read_struct(ea, sid=member_sid, asobject=asobject)
         return value, member_size
+    else:
+        return idc.get_bytes(ea, size), size
+    
+    # if m_t.get_realtype():
+    #     return read_word(ea, 1), 1
+    # elif ida_bytes.is_word(flags):
+    #     return read_word(ea, 2), 2
+    # elif ida_bytes.is_dword(flags):
+    #     return read_word(ea, 4), 4
+    # elif ida_bytes.is_qword(flags):
+    #     return read_word(ea, 8), 8
+    # elif ida_bytes.is_oword(flags):
+    #     return read_word(ea, 16), 16
+    # elif ida_bytes.is_strlit(flags):
+    #     return idc.get_bytes(ea, size), size
+    # elif ida_bytes.is_float(flags):
+    #     return idc.Float(ea), 4
+    # elif ida_bytes.is_double(flags):
+    #     return idc.Double(ea), 8
+    # elif ida_bytes.is_struct(flags):
+    #     value = read_struct(ea, sid=member_sid, asobject=asobject)
+    #     return value, member_size
     return None, size
 
 def _read_struct_member(struct, sid, union, ea, offset, name, size, asobject):
     """Read a member into a struct for read_struct."""
-    flags = idc.get_member_flag(sid, offset)
-    assert flags != -1
+    member_type = ida_typeinf.tinfo_t()
+    member = idc.get_member_id(sid, offset)
+    member_type.get_type_by_tid(member)
+    
+    s = get_struc(sid)
+    if not s:
+        flags = -1
+    
+    # m = get_member(s, offset)
+    # ida_typeinf.get_idainfo_by_udm()
+    # flags = -1 if not m else m.flag
+
+    # flags = idc.get_member_flag(sid, offset)
+    # assert flags != -1
     # Extra information for parsing a struct.
     member_sid, member_ssize = None, None
-    if ida_bytes.is_struct(flags):
+    if member_type.is_struct():
         member_sid = idc.get_member_strid(sid, offset)
-        member_ssize = ida_struct.get_struc_size(member_sid)
+        member_ssize = idc.get_struc_size(member_sid)
     # Get the address of the start of the member.
     member = ea
     if not union:
@@ -396,8 +444,9 @@ def _read_struct_member(struct, sid, union, ea, offset, name, size, asobject):
     array = []
     processed = 0
     while processed < size:
-        value, read = _read_struct_member_once(member + processed, flags, size, member_sid,
+        value, read = _read_struct_member_once(member + processed, size, member_sid,
                 member_ssize, asobject)
+        
         assert size % read == 0
         array.append(value)
         processed += read
@@ -427,7 +476,7 @@ def read_struct(ea, struct=None, sid=None, members=None, asobject=False):
     """
     # Handle sid/struct.
     if struct is not None:
-        sid2 = ida_struct.get_struc_id(struct)
+        sid2 = idc.get_struc_id(struct)
         if sid2 == idc.BADADDR:
             raise ValueError('Invalid struc name {}'.format(struct))
         if sid is not None and sid2 != sid:
@@ -436,7 +485,7 @@ def read_struct(ea, struct=None, sid=None, members=None, asobject=False):
     else:
         if sid is None:
             raise ValueError('Invalid arguments: sid={}, struct={}'.format(sid, struct))
-        if ida_struct.get_struc_name(sid) is None:
+        if idc.get_struc_name(sid) is None:
             raise ValueError('Invalid struc id {}'.format(sid))
     # Iterate through the members and add them to the struct.
     union = idc.is_union(sid)
@@ -446,7 +495,7 @@ def read_struct(ea, struct=None, sid=None, members=None, asobject=False):
             continue
         _read_struct_member(struct, sid, union, ea, offset, name, size, asobject)
     if asobject:
-        struct = objectview(struct, ea, ida_struct.get_struc_size(sid))
+        struct = objectview(struct, ea, idc.get_struc_size(sid))
     return struct
 
 def null_terminated(string):
@@ -576,7 +625,7 @@ def struct_create(name, union=False):
 
 def struct_open(name, create=False, union=None):
     """Get the SID of the IDA struct with the given name, optionally creating it."""
-    sid = ida_struct.get_struc_id(name)
+    sid = idc.get_struc_id(name)
     if sid == idc.BADADDR:
         if not create:
             return None
@@ -624,6 +673,6 @@ def struct_add_struct(sid, name, offset, msid, count=1):
 
     If sid is a union, offset must be -1.
     """
-    size = ida_struct.get_struc_size(msid)
+    size = idc.get_struc_size(msid)
     return idc.add_struc_member(sid, name, offset, idc.FF_DATA | ida_bytes.FF_STRUCT, msid, size * count)
 
