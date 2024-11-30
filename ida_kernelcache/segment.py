@@ -13,14 +13,19 @@ from ida_segment import SEGPERM_READ, SEGPERM_WRITE, SEGPERM_EXEC
 from . import ida_utilities as idau
 from . import kernel
 
-_log = idau.make_log(0, __name__)
+import idaapi
+
+_log = idau.make_log(1, __name__)
 
 idc.import_type(-1, 'mach_header_64')
+idc.import_type(-1, 'mach_header')
 idc.import_type(-1, 'load_command')
 idc.import_type(-1, 'segment_command_64')
+idc.import_type(-1, 'segment_command')
 idc.import_type(-1, 'section_64')
 
 _LC_SEGMENT_64 = 0x19
+_LC_SEGMENT = 0x1
 
 
 def _segments():
@@ -59,10 +64,13 @@ def _macho_segments_and_sections(ea):
     Each iteration yields a tuple:
         (segname, segstart, segend, [(sectname, sectstart, sectend), ...])
     """
-    hdr   = idau.read_struct(ea, 'mach_header_64', asobject=True)
-    nlc   = hdr.ncmds
+    if(idaapi.inf_is_64bit()):
+        hdr   = idau.read_struct(ea, 'mach_header_64', asobject=True)
+    else:
+        hdr   = idau.read_struct(ea, 'mach_header', asobject=True)
+    nlc   = int.from_bytes(hdr.ncmds, byteorder='little', signed=False)
     lc    = int(hdr) + len(hdr)
-    lcend = lc + hdr.sizeofcmds
+    lcend = lc + int.from_bytes(hdr.sizeofcmds, byteorder='little', signed=False)
     while lc < lcend and nlc > 0:
         loadcmd = idau.read_struct(lc, 'load_command', asobject=True)
         if loadcmd.cmd == _LC_SEGMENT_64:
@@ -80,7 +88,23 @@ def _macho_segments_and_sections(ea):
                 sects.append((sectname, sectstart, sectend))
                 sc += len(sect)
             yield (segname, segstart, segend, sects)
-        lc  += loadcmd.cmdsize
+        elif loadcmd.cmd == _LC_SEGMENT:
+            segcmd = idau.read_struct(lc, 'segment_command', asobject=True)
+            segname  = idau.null_terminated(_convert_list_to_bytes(segcmd.segname))
+            _log(0, "segname: " + segname)
+            segstart = segcmd.vmaddr
+            segend   = segstart + segcmd.vmsize
+            sects    = []
+            sc  = int(segcmd) + len(segcmd)
+            for i in range(segcmd.nsects):
+                sect = idau.read_struct(sc, 'section', asobject=True)
+                sectname  = idau.null_terminated(_convert_list_to_bytes(sect.sectname))
+                sectstart = sect.addr
+                sectend   = sectstart + sect.size
+                sects.append((sectname, sectstart, sectend))
+                sc += len(sect)
+            yield (segname, segstart, segend, sects)
+        lc  += int.from_bytes(loadcmd.cmdsize, signed=False)
         nlc -= 1
 
 def _initialize_segments_in_kext(kext, mach_header, skip=[]):

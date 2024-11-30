@@ -11,6 +11,7 @@ import idc
 import idautils
 # import ida_struct
 import idaapi
+import ida_typeinf
 
 from . import ida_utilities as idau
 
@@ -63,7 +64,7 @@ def create_struct_fields(sid=None, name=None, accesses=None, create=False, base=
         member = field_name(offset)
         ret = idau.struct_add_word(sid, member, offset - base, size)
         if ret != 0:
-            if ret == idc.STRUC_ERROR_MEMBER_OFFSET:
+            if ret == idc.REF_OFF32:
                 _log(2, 'Could not add {}.{} for access ({}, {})', name, member, offset, size)
             else:
                 success = False

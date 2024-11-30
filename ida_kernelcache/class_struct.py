@@ -121,6 +121,7 @@ import collections
 import idc
 import idautils
 import idaapi
+import ida_typeinf
 # import ida_struct
 
 from . import ida_utilities as idau
@@ -233,14 +234,24 @@ def _create_class_structs__slices(classinfo, endmarkers=True):
     sid = idau.struct_open(classname)
     if (sid):
         _log(1, f'IDA has already created {classname} struct, renaming it.')
-        if (not idc.set_struc_name(sid, f'ida_{classname}')):
-            _log(-1, 'failed to rename IDA struct')
-            # XXX: should we return in this case?
+        if not idau.struct_open(f'ida_{classname}'):
+            if (not idc.set_struc_name(sid, f'ida_{classname}')):
+                _log(-1, 'failed to rename IDA struct')
+                # XXX: should we return in this case?
+        else:
+            idc.del_struc(sid)
 
     sid  = idau.struct_open(classname, create=True)
     if sid is None or sidf is None:
-        _log(0, 'Could not create class structs for {}', classname)
-        return None
+        _log(0, 'Could not create class structs for {}, try to use rename', classname)
+        sid  = idau.struct_open(f'kc_{classname}', create=True)
+        if sid is None:
+            _log(0, 'Could not create class structs for {}', f'kc_{classname}')
+            return None
+        else:
+            if (not idc.set_struc_name(sid, classname)):
+                _log(-1, 'failed to rename IDA struct')
+                return None
     assert all(not idc.is_union(s) for s in (sidf, sid))
     # Calculate the size of the ::fields struct.
     if classinfo.superclass:
@@ -253,7 +264,8 @@ def _create_class_structs__slices(classinfo, endmarkers=True):
     # Add an ::end member to the fields struct if requested.
     if endmarkers:
         ret = idc.add_struc_member(sidf, classname + '::end', fields_size, idc.FF_UNK, -1, 0)
-        if ret not in (0, idc.STRUC_ERROR_MEMBER_NAME, idc.STRUC_ERROR_MEMBER_OFFSET):
+        # if ret not in (0, idc.STRUC_ERROR_MEMBER_NAME, idc.STRUC_ERROR_MEMBER_OFFSET):
+        if ret not in (0, ida_typeinf.TERR_BAD_NAME, ida_typeinf.TERR_BAD_OFFSET):
             # If that didn't work that's too bad, but continue anyway.
             _log(0, 'Could not create {}::end', classname)
     return sid, sidf, fields_start
@@ -272,7 +284,7 @@ def _populate_wrapper_struct__slices(sid, classinfo):
     offset = 0
     vtable_ptr_type = '{}::vtable *'.format(classinfo.classname)
     ret = idau.struct_add_ptr(sid, 'vtable', offset, type=vtable_ptr_type)
-    if ret not in (0, idc.STRUC_ERROR_MEMBER_OFFSET):
+    if ret not in (0, ida_typeinf.TERR_BAD_OFFSET):
         _log(0, 'Could not create {}.vtable: {}', classinfo.classname, ret)
         return False
     # Now add all the ::fields structs.
@@ -332,7 +344,7 @@ def _populate_wrapper_struct__unions(sid, classinfo):
     # First add the vtable pointer.
     vtable_ptr_type = '{}::vtable *'.format(classinfo.classname)
     ret = idau.struct_add_ptr(sid, 'vtable', -1, type=vtable_ptr_type)
-    if ret not in (0, idc.STRUC_ERROR_MEMBER_NAME):
+    if ret not in (0, ida_typeinf.TERR_BAD_NAME):
         _log(0, 'Could not create {}.vtable: {}', classinfo.classname, ret)
         return False
     # Now add all the ::fields structs.
@@ -345,7 +357,7 @@ def _populate_wrapper_struct__unions(sid, classinfo):
         # Add the ::fields struct to the wrapper. Ignore STRUC_ERROR_MEMBER_UNIVAR if the ::fields
         # struct has length 0.
         ret = idau.struct_add_struct(sid, ci.classname, -1, fields_sid)
-        if ret not in (0, idc.STRUC_ERROR_MEMBER_NAME, idc.STRUC_ERROR_MEMBER_UNIVAR):
+        if ret not in (0, ida_typeinf.TERR_BAD_NAME, ida_typeinf.TERR_BAD_UNIVAR):
             _log(0, '_populate_wrapper_struct__unions: For sid: {} and msid: {} Could not create {}.{}: {}', sid, fields_sid, classinfo.classname, ci.classname, ret)
             return False
     return True

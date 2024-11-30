@@ -67,7 +67,8 @@ def vtable_length(ea, end=None, scan=False):
     # Initialize default values.
     if end is None:
         end = idc.get_segm_end(ea)
-    words = idau.ReadWords(ea, end)
+    words = idau.ReadWords(ea, end + idau.WORD_SIZE)
+    
     # Iterate through the first VTABLE_OFFSET words. If any of them are nonzero, then we can skip
     # past all the words we just saw.
     for idx, word in enumerate(islice(words, VTABLE_OFFSET)):
@@ -101,7 +102,10 @@ def vtable_length(ea, end=None, scan=False):
     # until either we find a zero word (not included), or an address which is not in the range of kernel addresses  or run out of words in the stream.
     # info = idaapi.get_inf_structure()
     min_addr, max_addr = ida_ida.inf_get_min_ea(), ida_ida.inf_get_max_ea()
-    length = VTABLE_OFFSET + 1 + idau.iterlen(takewhile(lambda word: word != 0 and min_addr < word < max_addr, words))
+    def is_vfun(word):
+        # print(hex(word))
+        return word != 0 and min_addr < word < max_addr
+    length = VTABLE_OFFSET + 1 + idau.iterlen(takewhile(is_vfun, words))
     # Now it's simple: We are valid if the length is long enough, invalid if it's too short.
     return return_value(length >= MIN_VTABLE_LENGTH, length)
 

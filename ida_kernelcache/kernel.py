@@ -82,6 +82,8 @@ def _get_kernelcache_format():
     # once upon a time every KEXT had it's GOT ...
     if any(idc.get_segm_name(seg).endswith("__got") for seg in idautils.Segments()):
         return KC_11_NORMAL
+    if not any(idc.get_segm_name(seg) is '__PLK_TEXT_EXEC' for seg in idautils.Segments()):
+        return KC_LEGACY
     return KC_12_MERGED
 
 kernelcache_format = _get_kernelcache_format()

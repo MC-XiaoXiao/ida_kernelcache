@@ -156,10 +156,13 @@ def get_ea_name(ea, fromaddr=idc.BADADDR, true=False, user=False):
     Returns:
         The name of the address or "".
     """
+    if ea % 2 == 1:
+        ea = ea - 1
+
     if user and not idc.hasUserName(ida_bytes.get_full_flags(ea)):
         return ""
     if true:
-        return ida_name.get_ea_name(fromaddr, ea)
+        return ida_name.get_ea_name(ea)
     else:
         return idc.get_name(ea, ida_name.GN_VISIBLE | idc.calc_gtn_flags(fromaddr, ea))
 
@@ -274,7 +277,7 @@ def Addresses(start, end=None, step=1, length=None, partial=False, aligned=False
 def _instructions_by_range(start, end):
     """A generator to iterate over instructions in a range."""
     pc = start
-    if pc % 2:
+    if pc % 2 is 1:
         pc = pc - 1
     while pc < end:
         insn = idautils.DecodeInstruction(pc)
@@ -524,6 +527,12 @@ def _fix_unrecognized_function_insns(func):
 
 def _convert_address_to_function(func):
     """Convert an address that IDA has classified incorrectly into a proper function."""
+
+    if func % 2 == 1:
+        func = func - 1
+        idc.add_func(func)
+        return True
+
     # If everything goes wrong, we'll try to restore this function.
     orig = idc.first_func_chunk(func)
     if idc.find_func_end(func) == idc.BADADDR:
@@ -565,6 +574,8 @@ def _convert_address_to_function(func):
 
 def is_function_start(ea):
     """Return True if the address is the start of a function."""
+    if ea % 2 is 1:
+        ea = ea - 1     # ARM Thumb
     return idc.get_func_attr(ea, idc.FUNCATTR_START) == ea
 
 def force_function(addr):

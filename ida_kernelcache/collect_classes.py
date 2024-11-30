@@ -22,6 +22,7 @@ from . import symbol
 from . import vtable
 from . import kernel
 import re
+import ida_ida
 
 _log = idau.make_log(2, __name__)
 
@@ -78,6 +79,66 @@ class _Regs(object):
             self.clear(self._reg(reg))
         else:
             self._regs[self._reg(reg)] = value & 0xffffffffffffffff
+
+def _emulate_arm(start, end, on_BL=None, on_RET=None):
+    # Super basic emulation.
+    reg = _Regs()
+    def load(addr, dtyp):
+        if not addr:
+            return None
+        if dtyp == idaapi.dt_qword:
+            size = 8
+        elif dtyp == idaapi.dt_dword:
+            size = 4
+        else:
+            return None
+        return idau.read_word(addr, size)
+    def cleartemps():
+        for t in ['X{}'.format(i) for i in range(0, 19)]:
+            reg.clear(t)
+
+    for insn in idau.Instructions(start, end):
+        _log(11, 'Processing instruction {:#x}', insn.ea)
+        mnem = insn.get_canon_mnem()
+        if mnem == 'LDR' and not insn.auxpref & _MEMOP_WBINDEX:
+            if(insn.Op2.type == idc.o_mem):
+                reg[insn.Op1.reg] = load(insn.Op2.addr, insn.Op1.dtype)
+        elif mnem == 'STR':
+            None
+        elif mnem == 'ADD' and insn.Op2.type == idc.o_reg and insn.Op3.type == idc.o_imm:
+            reg[insn.Op1.reg] = reg[insn.Op2.reg] + insn.Op3.value
+        elif mnem == 'ADD' and insn.Op2.type == idc.o_imm:
+            reg[insn.Op1.reg] = reg[insn.Op1.reg] + insn.Op2.value
+        elif mnem == 'BX':
+            if reg._reg(insn.Op1.reg) == 'LR':
+                if on_RET:
+                    on_RET(reg)
+                break
+            else:
+                _log(1, "Found BX at " + str(reg[insn.Op1.reg]))
+                _emulate_arm(reg[insn.Op1.reg], idc.find_func_end(reg[insn.Op1.reg]), on_BL, on_RET)
+        elif mnem == 'NOP':
+            pass
+        elif mnem == 'PAC':
+            pass
+        elif mnem == 'MOV' and insn.Op2.type == idc.o_imm:
+            reg[insn.Op1.reg] = insn.Op2.value
+        elif mnem == 'MOV' and insn.Op2.type == idc.o_reg:
+            reg[insn.Op1.reg] = reg[insn.Op2.reg]
+        elif mnem == 'BLX' and insn.Op1.type == idc.o_reg:
+            # if reg._reg(insn.Op1.reg) == 'R12':
+            if on_BL:
+                on_BL(reg[insn.Op1.reg], reg)
+            cleartemps()
+        elif mnem == 'POP':
+            if idc.generate_disasm_line(insn.ea, 0).find('NE') == -1:
+                if idc.generate_disasm_line(insn.ea, 0).find('PC') != -1:
+                    if on_RET:
+                        on_RET(reg)
+                    break
+        else:
+            _log(2, 'Unrecognized instruction at address {:#x}', insn.ea)
+            reg.clearall()
 
 def _emulate_arm64(start, end, on_BL=None, on_RET=None):
     """A very basic partial Arm64 emulator that does just enough to find OSMetaClass
@@ -184,15 +245,28 @@ def _process_mod_init_func_for_metaclasses(func, found_metaclass):
     """Process a function from the __mod_init_func section for OSMetaClass information."""
     _log(4, 'Processing function {}', idc.get_func_name(func))
     def on_BL(addr, reg):
-        X0, X1, X3 = reg['X0'], reg['X1'], reg['X3']
-        if not (X0 and X1 and X3):
-            return
-        _log(5, 'Have call to {:#x}({:#x}, {:#x}, ?, {:#x})', addr, X0, X1, X3)
-        # OSMetaClass::OSMetaClass(this, className, superclass, classSize)
-        if not (bool(re.match(".*__cstring", idc.get_segm_name(X1)))) or not idc.get_segm_name(X0):
-            return
-        found_metaclass(X0, idc.get_strlit_contents(X1).decode(), X3, reg['X2'] or None)
-    _emulate_arm64(func, idc.find_func_end(func), on_BL=on_BL)
+        if idaapi.inf_is_64bit():
+            X0, X1, X3 = reg['X0'], reg['X1'], reg['X3']
+            if not (X0 and X1 and X3):
+                return
+            _log(5, 'Have call to {:#x}({:#x}, {:#x}, ?, {:#x})', addr, X0, X1, X3)
+            # OSMetaClass::OSMetaClass(this, className, superclass, classSize)
+            if not (bool(re.match(".*__cstring", idc.get_segm_name(X1)))) or not idc.get_segm_name(X0):
+                return
+            found_metaclass(X0, idc.get_strlit_contents(X1).decode(), X3, reg['X2'] or None)
+        else:
+            R0, R1, R3 = reg['R0'], reg['R1'], reg['R3']
+            if not (R0 and R1 and R3):
+                return
+            _log(5, 'Have call to {:#x}({:#x}, {:#x}, ?, {:#x})', addr, R0, R1, R3)
+            # OSMetaClass::OSMetaClass(this, className, superclass, classSize)
+            if not (bool(re.match(".*__cstring", idc.get_segm_name(R1)))) or not idc.get_segm_name(R0):
+                return
+            found_metaclass(R0, idc.get_strlit_contents(R1).decode(), R3, reg['R2'] or None)
+    if idaapi.inf_is_64bit():
+        _emulate_arm64(func, idc.find_func_end(func), on_BL=on_BL)
+    else:
+        _emulate_arm(func, idc.find_func_end(func), on_BL=on_BL)
 
 def _process_mod_init_func_section_for_metaclasses(segstart, found_metaclass):
     """Process a __mod_init_func section for OSMetaClass information."""
@@ -202,7 +276,7 @@ def _process_mod_init_func_section_for_metaclasses(segstart, found_metaclass):
 
 def _should_process_segment(seg, segname):
     """Check if we should process the specified segment."""
-    return  bool(re.match('.*__mod_init_func', segname)) or bool(re.match('.*__kmod_init', segname))
+    return  bool(re.match('.*__mod_init_func', segname)) or bool(re.match('.*__kmod_init', segname)) or bool(re.match('.*__constructor', segname))
 
 def _collect_metaclasses():
     """Collect OSMetaClass information from all kexts in the kernelcache."""
@@ -259,10 +333,18 @@ _MAX_GETMETACLASS_INSNS = 7
 def _get_vtable_metaclass(vtable_addr, metaclass_info):
     """Simulate the getMetaClass method of the vtable and check if it returns an OSMetaClass."""
     getMetaClass = idau.read_word(vtable_addr + _VTABLE_GETMETACLASS * idau.WORD_SIZE)
+    print("Getting metaclass at " + hex(getMetaClass))
     def on_RET(reg):
-        on_RET.ret = reg['X0']
+        if(idaapi.inf_is_64bit()):
+            on_RET.ret = reg['X0']
+        else:
+            on_RET.ret = reg['R0']
     on_RET.ret = None
-    _emulate_arm64(getMetaClass, getMetaClass + idau.WORD_SIZE * _MAX_GETMETACLASS_INSNS,
+    if(idaapi.inf_is_64bit()):
+        _emulate_arm64(getMetaClass, getMetaClass + idau.WORD_SIZE * _MAX_GETMETACLASS_INSNS,
+            on_RET=on_RET)
+    else:
+        _emulate_arm(getMetaClass, getMetaClass + idau.WORD_SIZE * _MAX_GETMETACLASS_INSNS,
             on_RET=on_RET)
     if on_RET.ret in metaclass_info:
         return on_RET.ret
@@ -358,7 +440,7 @@ def _collect_vtables(metaclass_info):
 
 def _check_filetype(filetype):
     """Checks that the filetype is compatible before trying to process it."""
-    return ('Mach-O' in filetype or 'kernelcache' in filetype) and 'ARM64' in filetype
+    return ('Mach-O' in filetype or 'kernelcache' in filetype) and ('ARM64' in filetype or 'ARMv' in filetype)
 
 def collect_class_info_internal():
     """Collect information about C++ classes defined in a kernelcache.
